@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="Night DemiGod">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Reading · Phaidei Archive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="reader.css">
+</head>
+<body>
+  <div id="progress"></div>
+
+  <header class="bar">
+    <a class="back" href="index.html">← Archive</a>
+    <div class="who">
+      <span id="bookTitle">Loading…</span>
+      <span id="bookAuthor"></span>
+    </div>
+    <div class="tools">
+      <select id="chapterSelect" aria-label="Jump to chapter"></select>
+      <button id="smaller" aria-label="Smaller text">A−</button>
+      <button id="bigger" aria-label="Bigger text">A+</button>
+      <button id="theme" aria-label="Switch theme">Paper</button>
+    </div>
+  </header>
+
+  <main>
+    <article id="text"></article>
+
+    <nav class="pager">
+      <button id="prev">← Previous</button>
+      <span id="pos"></span>
+      <button id="next">Next →</button>
+    </nav>
+    <p class="ao3link" id="ao3link"></p>
+  </main>
+
+  <script src="reader.js"></script>
+</body>
+</html>

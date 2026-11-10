@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Phaidei Archive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+</head>
+<body>
+  <header class="hero">
+    <p class="kicker">Phainon &nbsp;·&nbsp; Mydei</p>
+    <h1>Phaidei Archive</h1>
+    <p class="sub">when khaslana gets your library so you gotta improvise</p>
+    <div class="meander" aria-hidden="true"></div>
+
+    <details class="notice">
+      <summary>Read before browsing</summary>
+      <p>This is an archive of works that were originally posted on <strong>AO3</strong> and saved by myself or friends that sent me their downloads. It is simply a means to make navigating works easier in this time where ao3 is down and to keep them available for future crises lol </p>
+        
+     <p> If you are the author of any of these works and would like them removed, please contact
+      <strong>kooguang</strong> on twitter and it will be removed! I tried to ask as many authors personally for permission but many didn't have their socials accessible.</p>
+
+      <p>If you'd like a work to be added to the archive you can also contact me!</p>
+
+      
+    </details>
+  </header>
+
+  <section class="controls">
+    <input id="search" type="search" placeholder="Search title, author, summary…" aria-label="Search">
+    <div class="tagpicker" id="tagpicker">
+      <input id="tagInput" type="text" placeholder="Filter by tags… (click to browse)"
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="tagList" aria-label="Filter by tags">
+      <ul id="tagList" role="listbox" hidden></ul>
+    </div>
+    <select id="rating" aria-label="Filter by rating"></select>
+    <select id="status" aria-label="Filter by status"></select>
+    <select id="sort" aria-label="Sort">
+      <option value="default">Sort: shelf order</option>
+      <option value="title">Title A–Z</option>
+      <option value="author">Author A–Z</option>
+      <option value="words">Longest first</option>
+    </select>
+    <button id="random">Surprise me</button>
+    <button id="savedToggle">Bookmarked only</button>
+  </section>
+
+  <div id="activeTags"></div>
+  <p id="count"></p>
+
+  <p id="count"></p>
+  <main id="list"></main>
+
+  <footer>
+    <div class="meander" aria-hidden="true"></div>
+    <p>Bookmarks are stored only in your own browser.</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

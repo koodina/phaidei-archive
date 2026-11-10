@@ -1,0 +1,194 @@
+:root {
+    --fs: 21px;
+    --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --display: "Cinzel", Georgia, "Times New Roman", serif;
+    --read: Georgia, "Times New Roman", serif;
+    --blue: #5b9bff;
+    --red: #ff5a6a;
+  }
+  
+  html[data-theme="Night DemiGod"] {
+    --bg: #090c16;
+    --panel: #101528;
+    --line: #262e50;
+    --text: #e9e4d6;
+    --muted: #9aa2bf;
+    --gold: #d4ad57;
+    --bar: rgba(9, 12, 22, 0.92);
+  }
+  html[data-theme="Day DemiGod"] {
+    --bg: #f5f0e3;
+    --panel: #ebe4d2;
+    --line: #d3c8ab;
+    --text: #2a2833;
+    --muted: #6a6777;
+    --gold: #8a6416;
+    --bar: rgba(245, 240, 227, 0.94);
+  }
+  
+  * { box-sizing: border-box; }
+  
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--read);
+  }
+  html[data-theme="Night DemiGod"] body {
+    background-image:
+      radial-gradient(700px 400px at 0% -6%, rgba(50, 110, 255, 0.2), transparent 65%),
+      radial-gradient(700px 400px at 100% -6%, rgba(230, 40, 65, 0.2), transparent 65%);
+    background-repeat: no-repeat;
+  }
+
+  
+  ::selection { background: var(--gold); color: var(--bg); }
+  :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  
+  #progress {
+    position: fixed;
+    top: 0; left: 0;
+    height: 3px;
+    width: 0;
+    z-index: 20;
+    background: linear-gradient(90deg, var(--blue), var(--gold), var(--red));
+  }
+  
+ 
+  .bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    padding: 10px 16px;
+    background: var(--bar);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    font-family: var(--ui);
+  }
+  .back { color: var(--gold); text-decoration: none; font-size: 0.85rem; }
+  .back:hover { text-decoration: underline; }
+  
+  .who {
+    flex: 1 1 160px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  #bookTitle {
+    font-family: var(--display);
+    font-size: 0.95rem;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #bookAuthor { font-size: 0.75rem; color: var(--muted); }
+  
+  .tools { display: flex; gap: 6px; flex-wrap: wrap; }
+  select, button {
+    font-family: var(--ui);
+    font-size: 0.85rem;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled), select:hover { border-color: var(--gold); }
+  button:disabled { opacity: 0.35; cursor: default; }
+  #chapterSelect { max-width: 170px; }
+  
+
+  main { padding: 0 18px 60px; }
+  
+  #text {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding-top: 36px;
+    font-size: var(--fs);
+    line-height: 1.75;
+    overflow-wrap: break-word;
+    hyphens: auto;
+  }
+  #text p { margin: 0 0 1.05em; }
+  #text a { color: var(--gold); }
+  #text hr { border: 0; height: 1px; background: var(--line); margin: 2em 0; }
+  
+  #text h2.chapter-title {
+    margin: 0 0 1.4em;
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 1.5em;
+    letter-spacing: 0.06em;
+    text-align: center;
+  }
+  #text h2.chapter-title::after {
+    content: "";
+    display: block;
+    width: 120px;
+    height: 2px;
+    margin: 14px auto 0;
+    background: linear-gradient(90deg, var(--blue), var(--gold), var(--red));
+  }
+  #text h1, #text h3 { font-family: var(--display); font-weight: 500; }
+  
+  #text blockquote {
+    margin: 0 0 1.2em;
+    padding: 0.1em 0 0.1em 1em;
+    border-left: 3px solid var(--gold);
+    color: var(--muted);
+    font-size: 0.92em;
+  }
+  
+  /*info block on the first page */
+  #text dl { margin: 1em 0; font-size: 0.8em; line-height: 1.5; }
+  #text dt {
+    margin-top: 0.8em;
+    font-family: var(--ui);
+    font-size: 0.8em;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  #text dd { margin: 0; }
+  #text table { border-collapse: collapse; max-width: 100%; display: block; overflow-x: auto; }
+  #text td, #text th { border: 1px solid var(--line); padding: 4px 8px; }
+  
+ 
+  .pager {
+    max-width: 40rem;
+    margin: 3em auto 0;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-family: var(--ui);
+  }
+  #pos { font-size: 0.8rem; color: var(--muted); letter-spacing: 0.08em; }
+  .pager button { padding: 9px 16px; }
+  
+  .ao3link {
+    max-width: 40rem;
+    margin: 18px auto 0;
+    text-align: center;
+    font-family: var(--ui);
+    font-size: 0.8rem;
+  }
+  .ao3link a { color: var(--muted); }
+  
+  .error {
+    max-width: 32rem;
+    margin: 80px auto;
+    text-align: center;
+    font-family: var(--ui);
+    color: var(--muted);
+  }
