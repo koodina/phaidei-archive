@@ -25,7 +25,7 @@ const normalize = s => String(s ?? "")
 
 
 
-fetch("fics.json?v=2") //to prevent browser using a cashed ver of file like it happened rn 
+fetch("fics.json?v=" + Date.now()) //to prevent browser using a cashed ver of file like it happened rn 
   .then(r => r.json())
   .then(data => {
     fics = data;
