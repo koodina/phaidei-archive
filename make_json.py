@@ -15,7 +15,7 @@ OUT = Path("fics.json")
 
 
 def clean(text):
-    #unescape html stuff, remove tags
+    #unescape html stuff n remove tags
     text = re.sub(r"<br\s*/?>", " ", text)
     text = re.sub(r"</p>", " ", text)
     text = re.sub(r"<[^>]+>", "", text)
@@ -269,9 +269,7 @@ def write_book(path, entry):
     return True
 
 
-#  ---------- PDFs ----------
-#  Reads a PDF that was printed from an AO3 work page (Chrome / Firefox "Save as PDF").
-#  Needs PyMuPDF:  pip3 install pymupdf
+#pdfs annoying ass 
 
 BODY_LABELS = {"Summary", "Notes", "Chapter Summary", "Chapter Notes", "Chapter End Notes", "End Notes"}
 INFO_LABELS = {"Rating", "Archive Warning", "Archive Warnings", "Category", "Fandom", "Fandoms",
@@ -281,8 +279,8 @@ END_PUNCT = re.compile(r"[.!?…”\"’)\]*—–:;]$")
 
 
 def pdf_inline(block, links):
-    #turn the lines of one text block into one string of html (keeps italics, bold and links)
-    segs = []  # [text, (italic, bold, href)]
+    #turn the lines of one text block into one string of html (keeps italics bold and links)
+    segs = []  
     for line in block["lines"]:
         pieces = []
         for s in line["spans"]:
@@ -302,7 +300,7 @@ def pdf_inline(block, links):
             continue
         if segs:
             prev = "".join(t for t, _ in segs)
-            #a hyphen at the end of a line is a real hyphen (Flame-Chase), so join with no space
+            #a hyphen at the end of a line is a real hyphen so join with no space
             if not re.search(r"[A-Za-z]-$", prev.rstrip()):
                 if segs[-1][1] == pieces[0][1]:
                     segs[-1][0] = segs[-1][0].rstrip() + " "
@@ -345,7 +343,7 @@ def parse_pdf(path):
 
 
     
-    # ---- read AO3 metadata across multiple pages ----
+    #read metadata across multiple pages in case tags r long it finishes it n gets to summary
     fields, order = {}, []
     ao3 = ""
     cur = None
@@ -365,12 +363,12 @@ def parse_pdf(path):
                 if not text:
                     continue
 
-                # The Summary heading marks the beginning of the story copy
+                #summary heading marks the beginning of the story copy
                 if text == "Summary":
                     story_start = pno
                     break
 
-                # Extract AO3 URL
+                #extract ao3 link url
                 m = re.search(
                     r"https?://archiveofourown\.org/works/\d+",
                     text
@@ -378,7 +376,7 @@ def parse_pdf(path):
                 if m:
                     ao3 = m.group(0).replace("http://", "https://")
 
-                # Detect metadata labels
+                #labels detection
                 label_match = re.match(r"^(.+?):\s*(.*)$", text)
 
                 if (
@@ -392,7 +390,7 @@ def parse_pdf(path):
                     order.append(cur)
                     continue
 
-                # Stats continue onto the next page in some AO3 PDFs
+                #stats field can be wrapped across multiple lines, so we append to it
                 if cur == "Stats":
                     if re.match(
                         r"^(Published|Updated|Completed|Words|Chapters):",
@@ -401,7 +399,7 @@ def parse_pdf(path):
                         fields[cur] += " " + text
                     continue
 
-                # Append wrapped metadata values
+               
                 if cur:
                     if fields[cur] and not re.search(r"[A-Za-z]-$", fields[cur]):
                         fields[cur] += " "
@@ -413,12 +411,12 @@ def parse_pdf(path):
         if story_start is not None:
             break
 
-    # Fallback for PDFs without a Summary heading
+    #fall back to first page if no summary heading found, but only if there are metadata fields present
     if story_start is None:
         story_start = 1 if "Rating" in fields else 0
 
 
-    # ---- every text block after that, in reading order ----
+    #text 
     sizes, items = {}, []
     for pno in range(story_start, len(doc)):
         page = doc[pno]
@@ -444,7 +442,7 @@ def parse_pdf(path):
                 "bold": all(("Bold" in s["font"] or s["flags"] & 16) for s in spans),
                 "lines": len(b["lines"]), "html": pdf_inline(b, links),
             })
-        # thin horizontal lines drawn between paragraphs are scene breaks
+        #thin horizontal lines drawn between paragraphs are scene breaks
         for d in page.get_drawings():
             r = d["rect"]
             if r.height <= 3 and r.width >= 200 and r.x0 >= 30 and r.x1 <= 590 and d.get("fill") != (0.0, 0.0, 0.9333000183105469):
@@ -466,11 +464,11 @@ def parse_pdf(path):
     is_pointer = lambda t: bool(re.match(r"^See the end of the (work|chapter) for (more )?notes", t))
     is_afterword = lambda t: t.startswith("Please drop by the Archive and comment")
 
-    # ---- walk through the blocks: header (summary / notes), then chapters ----
+    #walk through the blocks: header (summary / notes), then chapters
     author, summary, notes = "", [], []
     chapters, cur_ch = [], None
     state, region, quote = "header", None, None
-    prev = None   # the paragraph we last added, in case it continues on the next page
+    prev = None   #the paragraph we last added, in case it continues on the next page
 
     def close_quote():
         nonlocal quote
@@ -496,7 +494,7 @@ def parse_pdf(path):
             if it["kind"] == "hr":
                 continue
             if is_heading(it) and not re.match(r"^Chapter \d+", t):
-                continue                                   # the work's title
+                continue                                   #the work's title
             if t.startswith("by ") and not author and it["lines"] == 1:
                 author = t[3:].strip()
                 continue
@@ -505,7 +503,7 @@ def parse_pdf(path):
                 continue
             if is_pointer(t) or is_afterword(t):
                 if is_pointer(t) and region:
-                    state, region = "story", None          # the header is over, the story starts next
+                    state, region = "story", None          #the header is over, the story starts next
                 continue
             if region == "Summary":
                 summary.append(it["html"])
@@ -513,9 +511,9 @@ def parse_pdf(path):
             if region == "Notes" and it["x0"] >= 75:
                 notes.append(it["html"])
                 continue
-            state, region = "story", None                  # anything else is the story itself
+            state, region = "story", None                  #anything else is the story itself
 
-        # ---- story ----
+        #story
         if is_afterword(t) or is_pointer(t):
             continue
         if is_heading(it):
@@ -538,7 +536,7 @@ def parse_pdf(path):
             continue
         if region in ("Chapter Summary", "Chapter Notes") and it["x0"] < 75:
             close_quote()
-            region = None                                  # indented text is notes; flush-left text is the story
+            region = None                                  #indented text is notes; flush-left text is the story
         if region:
             if not quote:
                 cur_ch["parts"].append("<blockquote>")
@@ -546,10 +544,10 @@ def parse_pdf(path):
             cur_ch["parts"].append(f"<p>{it['html']}</p>")
             continue
         close_quote()
-        # a paragraph that carries on over a page break
+        #a paragraph that carries on over a page break
         if (prev and it["first"] and prev[0]["last"] and prev[0]["page"] == it["page"] - 1
                 and (not END_PUNCT.search(prev[0]["plain"]) or t[:1].islower())):
-            before = cur_ch["parts"][prev[1]][:-4]          # without the closing </p>
+            before = cur_ch["parts"][prev[1]][:-4]          #without the closing </p>
             glue = "" if re.search(r"[A-Za-z]-$", prev[0]["plain"]) else " "
             cur_ch["parts"][prev[1]] = before + glue + it["html"] + "</p>"
             prev = (dict(it, plain=t), prev[1])
@@ -559,7 +557,7 @@ def parse_pdf(path):
     close_quote()
     sections = [{"title": ch["title"], "html": "".join(ch["parts"])} for ch in chapters]
 
-    # ---- put the info together ----
+    #put everything tght chakalaka
     meta = doc.metadata or {}
     title = (meta.get("title") or "").strip()
     author = author or (meta.get("author") or "").strip()
@@ -645,12 +643,12 @@ def remove_duplicate_fics(entries):
         else:
             kept = unique[key]
 
-            # Merge file paths without duplicates
+            #merge file paths without duplicates
             kept["files"] = list(dict.fromkeys(
                 kept.get("files", []) + entry.get("files", [])
             ))
 
-            # Update metadata, but don't overwrite the merged files
+            #update metadata, but don't overwrite the merged files
             for field, value in entry.items():
                 if field in ("files", "book"):
                     continue
@@ -710,7 +708,7 @@ for p in sorted(FIC_DIR.iterdir()):
             print("Could not build reader copy for", p.name, "-", e)
 
     elif p.suffix.lower() == ".pdf":
-        # Prefer EPUB when both formats exist with the same filename
+        #pick EPUB when both formats exist with the same filename
         if p.stem in epub_stems:
             continue
         try:
@@ -722,7 +720,7 @@ for p in sorted(FIC_DIR.iterdir()):
         if entry["title"] == p.stem.replace("_", " ").replace("-", " ").strip():
             entry["title"] = parsed["info"].get("title", entry["title"])
 
-        # build the on-site reading copy
+        #build the on-site reading copy
         try:
             if write_book_pdf(p, entry, parsed):
                 entry["book"] = p.stem
