@@ -302,6 +302,8 @@ $("savedToggle").addEventListener("click", e => {
   render();
 });
 
+
+//to scroll to a random fic in the list and flash it
 $("random").addEventListener("click", () => {
   const list = getVisible();
   if (!list.length) return;
@@ -310,4 +312,4 @@ $("random").addEventListener("click", () => {
   el.scrollIntoView({ behavior: "smooth", block: "center" });
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 2000);
-});
+}); 

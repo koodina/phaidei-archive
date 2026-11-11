@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="Night DemiGod">
+<html lang="en" data-theme="night">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,18 +7,15 @@
   <title>Reading · Phaidei Archive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="reader.css">
 </head>
 <body>
   <div id="progress"></div>
 
-  <header class="bar">
+  <header class="bar" id="bar">
     <a class="back" href="index.html">← Archive</a>
-    <div class="who">
-      <span id="bookTitle">Loading…</span>
-      <span id="bookAuthor"></span>
-    </div>
+    <div class="who"><span id="barTitle"></span></div>
     <div class="tools">
       <select id="chapterSelect" aria-label="Jump to chapter"></select>
       <button id="smaller" aria-label="Smaller text">A−</button>
@@ -27,15 +24,17 @@
     </div>
   </header>
 
-  <main>
+  <main class="page">
+    <section class="square hero" id="hero" hidden></section>
+    <section class="square" id="summarySquare" hidden></section>
+    <section class="square" id="notesSquare" hidden></section>
+   
+
+    <div class="meander" id="storyStart" aria-hidden="true" hidden></div>
+
     <article id="text"></article>
 
-    <nav class="pager">
-      <button id="prev">← Previous</button>
-      <span id="pos"></span>
-      <button id="next">Next →</button>
-    </nav>
-    <p class="ao3link" id="ao3link"></p>
+    <footer class="theend" id="theEnd" hidden></footer>
   </main>
 
   <script src="reader.js"></script>

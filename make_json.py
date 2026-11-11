@@ -14,7 +14,7 @@ OUT = Path("fics.json")
 
 
 def clean(text):
-    """remove HTML tags and extra spaces"""
+    #unescape html stuff, remove tags
     text = re.sub(r"<br\s*/?>", " ", text)
     text = re.sub(r"</p>", " ", text)
     text = re.sub(r"<[^>]+>", "", text)
@@ -22,11 +22,11 @@ def clean(text):
 
 
 def links_in(dd):
-    """get the text of every <a> link inside a block of HTML""" #here this is docstring used to describe what fic does instead of just a simple comm bc it can be found using the help() command
+    #gets text inside <a> tags n cleans it 
     return [clean(a) for a in re.findall(r"<a[^>]*>(.*?)</a>", dd, re.S)]
 
 
-#reading info from epub
+
 def read_epub(path):
     info = {}
     with zipfile.ZipFile(path) as z:
@@ -76,7 +76,7 @@ def read_epub(path):
                 info["words"] = int(words.group(1).replace(",", ""))
             chapters = re.search(r"Chapters:\s*(\d+)/(\d+|\?)", stats)
             if chapters:
-                done = chapters.group(1) == chapters.group(2)
+                done = chapters.group(1) == chapters.group(2) #verify if number/number of chapters so if fic complete
                 info["status"] = "Complete" if done else "In Progress"
             break
     return info
@@ -94,7 +94,6 @@ VOID = {"br", "hr"}
 
 
 class Cleaner(HTMLParser):
-    """keeps safe text formatting but drops scripts, styles and attributes"""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -115,7 +114,7 @@ class Cleaner(HTMLParser):
                     f'<a href="{html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">')
                 self.links.append(True)
             else:
-                self.links.append(False)  # internal links: keep the text, drop the link
+                self.links.append(False)  #no including internal links in reader copy
             return
         self.out.append(f"<{tag}>")
 
@@ -134,7 +133,7 @@ class Cleaner(HTMLParser):
 
     def handle_data(self, data):
         if not self.skip:
-            self.out.append(html.escape(data, quote=False))
+            self.out.append(html.escape(data, quote=False)) 
 
 
 def tidy(s):
@@ -145,26 +144,26 @@ def tidy(s):
 
 
 def read_sections(path):
-    """return list of {"title", "html"} in reading order"""
+    #returns a list of sections with title and html content from the epub file
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
-        opf_name = next(n for n in names if n.endswith(".opf"))
+        opf_name = next(n for n in names if n.endswith(".opf")) #opf here means the package file that contains the metadata and manifest of the epub
         opf = z.read(opf_name).decode("utf-8-sig")
-        base = posixpath.dirname(opf_name)
+        base = posixpath.dirname(opf_name) # base is where opf is 
 
         items, ncx_href = {}, None
         for tag in re.findall(r"<item\b[^>]*>", opf):
-            ident = re.search(r'\bid="([^"]*)"', tag)
-            href = re.search(r'\bhref="([^"]*)"', tag)
-            mtype = re.search(r'media-type="([^"]*)"', tag)
-            if ident and href:
+            id = re.search(r'\bid="([^"]*)"', tag) #id of the item in the manifest,
+            href = re.search(r'\bhref="([^"]*)"', tag) #pathto file
+            mtype = re.search(r'media-type="([^"]*)"', tag) #media type
+            if id and href:
                 full = posixpath.normpath(posixpath.join(base, unquote(href.group(1))))
-                items[ident.group(1)] = full
+                items[id.group(1)] = full
                 if mtype and mtype.group(1) == "application/x-dtbncx+xml":
                     ncx_href = full
-        spine = [items[i] for i in re.findall(r'<itemref\b[^>]*idref="([^"]*)"', opf) if i in items]
+        spine = [items[i] for i in re.findall(r'<itemref\b[^>]*idref="([^"]*)"', opf) if i in items] #to get in correct order
 
-        #toc : table of contents , this is used to get the titles of each section in the epub so that they can be displayed in the reader`
+        #toc : table of contents , this is used to get the titles of each section in the epub so that they can be displayed in the reader
         toc = {}
         if ncx_href and ncx_href in names:
             ncx = z.read(ncx_href).decode("utf-8-sig")
@@ -183,7 +182,7 @@ def read_sections(path):
             c.feed(z.read(name).decode("utf-8-sig", errors="replace"))
             c.close()
             body = tidy("".join(c.out))
-            #creates new otherwise 
+            
             if name in toc or not sections or not toc:
                 sections.append({"title": toc.get(name), "html": body})
             else:
@@ -207,15 +206,61 @@ def read_sections(path):
     return result
 
 
+def grab_block(s, label):
+    """Find <p>LABEL</p><blockquote>...</blockquote> and return what is inside it."""
+    m = re.search(r"<p>\s*" + re.escape(label) + r"\s*</p>\s*<blockquote>", s)
+    if not m:
+        return ""
+    start, depth = m.end(), 1
+    for t in re.finditer(r"<(/?)blockquote>", s[start:]):
+        depth += -1 if t.group(1) else 1
+        if depth == 0:
+            return s[start:start + t.start()].strip()
+    return ""
+
+
+def label_notes(s):
+    """Drop the 'see the end for notes' pointers and style the note labels."""
+    s = re.sub(r"(?:<p>\s*Chapter Notes\s*</p>\s*)?<div>\s*See the end of the chapter for (?:more )?notes\s*</div>", "", s)
+    s = re.sub(
+        r"<p>\s*(Chapter Summary|Chapter Notes|Chapter End Notes|End Notes|Notes|Summary)\s*</p>",
+        r'<p class="label">\1</p>', s)
+    return s
+
+
 def write_book(path, entry):
     sections = read_sections(path)
     if not sections:
         return False
+
+    # The first section ("Preface") holds the summary, author's notes and tag list.
+    # The reader shows those at the top, so pull them out of the story.
+    extras = {"summary_html": "", "notes_html": "", "info_html": ""}
+    if sections[0]["title"].strip().lower() == "preface":
+        preface = sections[0]["html"]
+        extras["summary_html"] = grab_block(preface, "Summary")
+        extras["notes_html"] = grab_block(preface, "Notes")
+        dl = re.search(r"<dl>.*?</dl>", preface, re.S)
+        extras["info_html"] = dl.group(0) if dl else ""
+        if any(extras.values()):
+            sections = sections[1:]
+
+    for sec in sections:
+        sec["html"] = label_notes(sec["html"])
+    if not sections:
+        return False
+
     BOOK_DIR.mkdir(exist_ok=True)
     data = {
         "title": entry["title"],
         "author": entry["author"],
         "ao3": entry["ao3"],
+        "rating": entry["rating"],
+        "status": entry["status"],
+        "words": entry["words"],
+        "tags": entry["tags"],
+        "summary": entry["summary"],
+        **extras,
         "chapters": sections,
     }
     (BOOK_DIR / f"{path.stem}.json").write_text(

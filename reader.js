@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-//wrapping browser localStorage access in try/catch so it doesn't break if the user has disabled it
+//browser storage with fallback to nothing if it fails for priv
 const store = {
   get(key, fallback) {
     try { const v = localStorage.getItem(key); return v === null ? fallback : v; }
@@ -13,8 +15,24 @@ const store = {
 
 const bookId = new URLSearchParams(location.search).get("book");
 let book = null;
-let current = 0;
+let chapterEls = [];
+let ready = false;  
 
+
+function scrollMax() {
+  return document.documentElement.scrollHeight - window.innerHeight;
+}
+function scrollRatio() {
+  const max = scrollMax();
+  return max > 0 ? window.scrollY / max : 0;
+}
+
+//keep your place when the text size changes
+function keepPosition(change) {
+  const r = scrollRatio();
+  change();
+  requestAnimationFrame(() => window.scrollTo(0, r * scrollMax()));
+}
 
 
 let fontSize = Number(store.get("readerFont", "21"));
@@ -25,104 +43,148 @@ function applyFont() {
 }
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  $("theme").textContent = theme === "Night DemiGod" ? "Day DemiGod" : "Night DemiGod";
+  $("theme").textContent = theme === "night" ? "Day DemiGod" : "Night DemiGod";
   store.set("readerTheme", theme);
 }
 applyFont();
-applyTheme(store.get("readerTheme", "Night DemiGod"));
+applyTheme(store.get("readerTheme", "night"));
 
-$("smaller").addEventListener("click", () => { fontSize -= 2; applyFont(); }); //this is a bit of a hack i saw, but it works I don't want to use a range input because it looks bad and doesn't work well on mobile how this works is it changes the font size variable and then calls applyFont which updates the CSS variable and saves it to localStorage
-$("bigger").addEventListener("click", () => { fontSize += 2; applyFont(); }); 
+$("smaller").addEventListener("click", () => keepPosition(() => { fontSize -= 2; applyFont(); }));
+$("bigger").addEventListener("click", () => keepPosition(() => { fontSize += 2; applyFont(); }));
 $("theme").addEventListener("click", () =>
-  applyTheme(document.documentElement.dataset.theme === "Night DemiGod" ? "Day Demigod" : "Night DemiGod"));
+  applyTheme(document.documentElement.dataset.theme === "night" ? "day" : "night"));
 
-//loading the book jison file and starting the reader 
+
 function showError(message) {
   $("text").innerHTML = `<p class="error"></p>`;
   $("text").firstChild.textContent = message;
-  $("bookTitle").textContent = "Phaidei Archive";
-  document.querySelector(".pager").style.display = "none";
+  $("barTitle").textContent = "Phaidei Archive";
+  document.querySelectorAll(".tools select").forEach(s => { s.hidden = true; });
 }
 
 if (!bookId) {
-  showError("No fic selected! Go back to the archive and pick one!");
+  showError("No fic selected. Go back to the archive and pick one.");
 } else {
   fetch(`books/${encodeURIComponent(bookId)}.json`)
-    .then(r => { if (!r.ok) throw new Error("missing"); return r.json(); }) 
+    .then(r => { if (!r.ok) throw new Error("missing"); return r.json(); })
     .then(start)
-    .catch(() => showError("Could not load this fic :( check that the file exists in the books folder!"));
+    .catch(() => showError("Could not load this fic. Use Live Server, or check that the file exists in the books folder."));
+}
+
+function detailsHtml() {
+  if (book.info_html) return book.info_html; 
+  const tags = book.tags || [];
+  return tags.length ? `<dl><dt>Tags</dt><dd>${esc(tags.join(", "))}</dd></dl>` : ""; 
+}
+
+function fillSquare(id, label, body) {
+  if (!body) return;
+  $(id).innerHTML = `<h2 class="sq-label">${label}</h2><div class="sq-body">${body}</div>`;
+  $(id).hidden = false;
 }
 
 function start(data) {
   book = data;
-  $("bookTitle").textContent = book.title;
-  $("bookAuthor").textContent = book.author ? "by " + book.author : "";
-  document.title = book.title + " · Phaidei Archive"; 
+  const title = book.title || "Untitled";
+  document.title = title + " · Phaidei Archive";
+  $("barTitle").textContent = title;
 
-  $("chapterSelect").innerHTML = "";
-  book.chapters.forEach((c, i) => {
-    const opt = document.createElement("option");
-    opt.value = i;
-    opt.textContent = c.title;
-    $("chapterSelect").appendChild(opt);
-  });
 
-  if (book.ao3) {
-    const a = document.createElement("a");
-    a.href = book.ao3;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = "Original on AO3 (please leave a kudos or comment when it’s back!)";
-    $("ao3link").appendChild(a);
+  const storyChapters = book.chapters.filter(c => !/^afterword$/i.test(c.title));
+  const badges = [
+    book.rating ? `<span class="badge" data-rating="${esc(book.rating)}">${esc(book.rating)}</span>` : "",
+    book.status ? `<span class="badge ${book.status === "Complete" ? "done" : ""}">${esc(book.status)}</span>` : "",
+    book.words ? `<span class="meta">${Number(book.words).toLocaleString()} words</span>` : "",
+    storyChapters.length > 1 ? `<span class="meta">${storyChapters.length} chapters</span>` : ""
+  ].join("");
+  const details = detailsHtml();
+  $("hero").innerHTML = `
+    <h1>${esc(title)}</h1>
+    ${book.author ? `<p class="by">by ${esc(book.author)}</p>` : ""}
+    <div class="badges">${badges}</div>
+    ${details ? `<div class="hero-info">${details}</div>` : ""}`;
+  $("hero").hidden = false;
+
+
+  fillSquare("summarySquare", "Summary",
+    book.summary_html || (book.summary ? `<p>${esc(book.summary)}</p>` : ""));
+  fillSquare("notesSquare", "Author’s notes", book.notes_html);
+  $("storyStart").hidden = false;
+
+
+  const single = book.chapters.length === 1;
+  $("text").innerHTML = book.chapters.map((c, i) => `
+    <section class="chapter" id="chapter-${i + 1}">
+      ${single ? "" : `<h2 class="chapter-title">${esc(c.title)}</h2>`}
+      ${c.html}
+    </section>`).join("");   // already cleaned by make_json.py
+  chapterEls = [...document.querySelectorAll(".chapter")];
+
+
+  if (single) {
+    $("chapterSelect").hidden = true;
+  } else {
+    $("chapterSelect").innerHTML = `<option value="-1">Top</option>` +
+      book.chapters.map((c, i) => `<option value="${i}">${esc(c.title)}</option>`).join("");
   }
 
-  //strt hash, or saved position, or 0
-  const fromHash = parseInt(location.hash.slice(1), 10);
-  const saved = parseInt(store.get("reader:" + bookId, "0"), 10);
-  show(fromHash ? fromHash - 1 : saved);
+  //end redirection to 
+  const unfinished = book.status && book.status !== "Complete";
+  $("theEnd").innerHTML = `
+    <p class="the-end">${unfinished ? "To be continued, keep an eye on the ao3 link!" : "The End"}</p>
+    <div class="end-links">
+      <button id="toTop">Back to top</button>
+      ${book.ao3 ? `<a href="${esc(book.ao3)}" target="_blank" rel="noopener noreferrer">Original on AO3 (please leave kudos &amp; comments when it’s back!)</a>` : ""}
+      <a href="index.html">Back to the archive</a>
+    </div>`; 
+  $("theEnd").hidden = false;
+  $("toTop").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+
+  // how the title in the top bar once the title square scrolls away hehe
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(([entry]) =>
+      $("bar").classList.toggle("scrolled", !entry.isIntersecting)).observe($("hero")); 
+  }
+
+
+  const fromHash = (location.hash.match(/^#chapter-(\d+)$/) || [])[1];
+  const savedPos = parseFloat(store.get("reader:" + bookId + ":pos", "0")) || 0;
+  const restore = () => { // jump to where you left off or the chapter in the URL hash
+    if (fromHash && chapterEls[fromHash - 1]) chapterEls[fromHash - 1].scrollIntoView();
+    else if (savedPos > 0.005 && savedPos < 0.995) window.scrollTo(0, savedPos * scrollMax());
+    ready = true;
+    updateReading();
+  };
+  (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(restore);
 }
 
-//showing a ch, and updating th Ui 
-function show(i) {
-  current = Math.min(book.chapters.length - 1, Math.max(0, i || 0));
-  const chapter = book.chapters[current];
+//jump to a chapter when the menu changes
+$("chapterSelect").addEventListener("change", e => {
+  const i = Number(e.target.value);
+  if (i < 0) window.scrollTo({ top: 0, behavior: "smooth" });
+  else chapterEls[i].scrollIntoView({ behavior: "smooth", block: "start" }); 
+});
 
-  $("text").innerHTML = chapter.html;   //already cleaned by make_json.py
-  const heading = document.createElement("h2");
-  heading.className = "chapter-title";
-  heading.textContent = chapter.title;
-  $("text").prepend(heading);
+//phaideiii progress line + works w chapter position
+let ticking = false;
+let saveTimer = null;
+function updateReading() {
+  ticking = false;
+  const ratio = Math.min(1, Math.max(0, scrollRatio()));
+  $("progress").style.width = ratio * 100 + "%";
 
+  const y = window.scrollY + 140;
+  let current = -1;
+  chapterEls.forEach((el, i) => {
+    if (el.getBoundingClientRect().top + window.scrollY <= y) current = i;
+  });
   $("chapterSelect").value = String(current);
-  $("pos").textContent = `${current + 1} / ${book.chapters.length}`;
-  $("prev").disabled = current === 0;
-  $("next").disabled = current === book.chapters.length - 1;
 
-  history.replaceState(null, "", "#" + (current + 1));
-  store.set("reader:" + bookId, String(current));
-  window.scrollTo(0, 0);
-  updateProgress();
+  if (ready) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => store.set("reader:" + bookId + ":pos", String(ratio)), 400);
+  }
 }
-
-$("prev").addEventListener("click", () => show(current - 1));
-$("next").addEventListener("click", () => show(current + 1));
-$("chapterSelect").addEventListener("change", e => show(Number(e.target.value)));
-window.addEventListener("hashchange", () => {
-  const n = parseInt(location.hash.slice(1), 10);
-  if (book && n && n - 1 !== current) show(n - 1);
-});
-
-
-document.addEventListener("keydown", e => { //adds arrow nav
-  if (!book || e.target.matches("select, input, textarea")) return;
-  if (e.key === "ArrowRight") show(current + 1);
-  if (e.key === "ArrowLeft") show(current - 1);
-});
-
-//phaideiiii themed progress line eats
-function updateProgress() {
-  const d = document.documentElement;
-  const max = d.scrollHeight - d.clientHeight;
-  $("progress").style.width = (max > 0 ? (d.scrollTop / max) * 100 : 0) + "%";
-}
-window.addEventListener("scroll", updateProgress, { passive: true });
+window.addEventListener("scroll", () => {
+  if (!ticking) { ticking = true; requestAnimationFrame(updateReading); }
+}, { passive: true });
