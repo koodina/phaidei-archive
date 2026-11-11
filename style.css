@@ -217,6 +217,7 @@
     margin: 4px 0 10px;
     font-size: 1.05rem;
     display: -webkit-box;
+    line-clamp: 4;
     -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
