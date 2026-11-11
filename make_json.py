@@ -207,7 +207,7 @@ def read_sections(path):
 
 
 def grab_block(s, label):
-    """Find <p>LABEL</p><blockquote>...</blockquote> and return what is inside it."""
+   #find the block of text that is labeled with the given label and return it as a string
     m = re.search(r"<p>\s*" + re.escape(label) + r"\s*</p>\s*<blockquote>", s)
     if not m:
         return ""
@@ -220,7 +220,7 @@ def grab_block(s, label):
 
 
 def label_notes(s):
-    """Drop the 'see the end for notes' pointers and style the note labels."""
+    #label the notes section with a class so that it can be styled differently in the reader
     s = re.sub(r"(?:<p>\s*Chapter Notes\s*</p>\s*)?<div>\s*See the end of the chapter for (?:more )?notes\s*</div>", "", s)
     s = re.sub(
         r"<p>\s*(Chapter Summary|Chapter Notes|Chapter End Notes|End Notes|Notes|Summary)\s*</p>",
@@ -233,8 +233,8 @@ def write_book(path, entry):
     if not sections:
         return False
 
-    # The first section ("Preface") holds the summary, author's notes and tag list.
-    # The reader shows those at the top, so pull them out of the story.
+    #first section ("Preface") holds the summary author's notes and tag list
+    #reader shows those at the top, so wepull them out of the story
     extras = {"summary_html": "", "notes_html": "", "info_html": ""}
     if sections[0]["title"].strip().lower() == "preface":
         preface = sections[0]["html"]
