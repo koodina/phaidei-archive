@@ -145,6 +145,25 @@
     color: var(--muted);
   }
   
+
+.hero-info {
+    font-family: var(--serif);
+    font-size: 1.15rem;
+}
+
+
+.hero-info dt {
+    font-family: var(--display);
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+}
+
+.hero-info dd {
+    font-family: var(--serif);
+    font-size: 1.15rem;
+}
+
   .badges {
     display: flex;
     flex-wrap: wrap;

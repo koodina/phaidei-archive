@@ -63,12 +63,12 @@ function showError(message) {
 }
 
 if (!bookId) {
-  showError("No fic selected. Go back to the archive and pick one.");
+  showError("No fic selected! Go back to the archive and pick one!");
 } else {
   fetch(`books/${encodeURIComponent(bookId)}.json`)
     .then(r => { if (!r.ok) throw new Error("missing"); return r.json(); })
     .then(start)
-    .catch(() => showError("Could not load this fic. Use Live Server, or check that the file exists in the books folder."));
+    .catch(() => showError("Could not load this fic :( check that the file exists in the books folder!"));
 }
 
 function detailsHtml() {
