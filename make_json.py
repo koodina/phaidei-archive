@@ -6,6 +6,7 @@ import posixpath
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote
+import fitz
 
 FIC_DIR = Path("fics")
 BOOK_DIR = Path("books")
@@ -268,9 +269,405 @@ def write_book(path, entry):
     return True
 
 
+#  ---------- PDFs ----------
+#  Reads a PDF that was printed from an AO3 work page (Chrome / Firefox "Save as PDF").
+#  Needs PyMuPDF:  pip3 install pymupdf
+
+BODY_LABELS = {"Summary", "Notes", "Chapter Summary", "Chapter Notes", "Chapter End Notes", "End Notes"}
+INFO_LABELS = {"Rating", "Archive Warning", "Archive Warnings", "Category", "Fandom", "Fandoms",
+               "Relationship", "Relationships", "Character", "Characters", "Additional Tags",
+               "Language", "Series", "Collections", "Stats"}
+END_PUNCT = re.compile(r"[.!?…”\"’)\]*—–:;]$")
+
+
+def pdf_inline(block, links):
+    #turn the lines of one text block into one string of html (keeps italics, bold and links)
+    segs = []  # [text, (italic, bold, href)]
+    for line in block["lines"]:
+        pieces = []
+        for s in line["spans"]:
+            if s["text"] == "":
+                continue
+            font = s["font"]
+            italic = "Italic" in font or "Oblique" in font or bool(s["flags"] & 2)
+            bold = "Bold" in font or bool(s["flags"] & 16)
+            href = ""
+            cx, cy = (s["bbox"][0] + s["bbox"][2]) / 2, (s["bbox"][1] + s["bbox"][3]) / 2
+            for rect, uri in links:
+                if rect.x0 <= cx <= rect.x1 and rect.y0 <= cy <= rect.y1:
+                    href = uri
+                    break
+            pieces.append([s["text"].replace("\n", " "), (italic, bold, href)])
+        if not pieces:
+            continue
+        if segs:
+            prev = "".join(t for t, _ in segs)
+            #a hyphen at the end of a line is a real hyphen (Flame-Chase), so join with no space
+            if not re.search(r"[A-Za-z]-$", prev.rstrip()):
+                if segs[-1][1] == pieces[0][1]:
+                    segs[-1][0] = segs[-1][0].rstrip() + " "
+                else:
+                    segs.append([" ", (False, False, "")])
+            else:
+                segs[-1][0] = segs[-1][0].rstrip()
+        segs.extend(pieces)
+
+    out = []
+    for text, (italic, bold, href) in segs:
+        t = html.escape(text, quote=False)
+        if not t.strip():
+            out.append(t)
+            continue
+        lead, core, trail = re.match(r"(\s*)(.*?)(\s*)$", t, re.S).groups()
+        if italic: core = f"<em>{core}</em>"
+        if bold: core = f"<strong>{core}</strong>"
+        if href:
+            core = f'<a href="{html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">{core}</a>'
+        out.append(lead + core + trail)
+    s = "".join(out)
+    s = re.sub(r"</em>(\s*)<em>", r"\1", s)
+    s = re.sub(r"</strong>(\s*)<strong>", r"\1", s)
+    s = re.sub(r'</a>(\s*)<a href="[^"]*"[^>]*>', r"\1", s)
+    return re.sub(r"[ \t\r\n]{2,}", " ", s).strip()
+
+
+
+def parse_pdf(path):
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        try:
+            import fitz
+        except ImportError:
+            raise RuntimeError("PDF support needs PyMuPDF. Run this once: pip3 install pymupdf")
+
+    doc = fitz.open(path)
+
+
+    
+    # ---- read AO3 metadata across multiple pages ----
+    fields, order = {}, []
+    ao3 = ""
+    cur = None
+    story_start = None
+
+    for pno, page in enumerate(doc):
+        page_dict = page.get_text("dict", sort=True)
+
+        for b in page_dict["blocks"]:
+            for l in b.get("lines", []):
+                text = re.sub(
+                    r"\s+",
+                    " ",
+                    "".join(s["text"] for s in l["spans"])
+                ).strip()
+
+                if not text:
+                    continue
+
+                # The Summary heading marks the beginning of the story copy
+                if text == "Summary":
+                    story_start = pno
+                    break
+
+                # Extract AO3 URL
+                m = re.search(
+                    r"https?://archiveofourown\.org/works/\d+",
+                    text
+                )
+                if m:
+                    ao3 = m.group(0).replace("http://", "https://")
+
+                # Detect metadata labels
+                label_match = re.match(r"^(.+?):\s*(.*)$", text)
+
+                if (
+                    label_match
+                    and label_match.group(1).strip() in INFO_LABELS
+                ):
+                    cur = label_match.group(1).strip()
+                    value = label_match.group(2).strip()
+
+                    fields[cur] = value
+                    order.append(cur)
+                    continue
+
+                # Stats continue onto the next page in some AO3 PDFs
+                if cur == "Stats":
+                    if re.match(
+                        r"^(Published|Updated|Completed|Words|Chapters):",
+                        text
+                    ):
+                        fields[cur] += " " + text
+                    continue
+
+                # Append wrapped metadata values
+                if cur:
+                    if fields[cur] and not re.search(r"[A-Za-z]-$", fields[cur]):
+                        fields[cur] += " "
+                    fields[cur] += text
+
+            if story_start is not None:
+                break
+
+        if story_start is not None:
+            break
+
+    # Fallback for PDFs without a Summary heading
+    if story_start is None:
+        story_start = 1 if "Rating" in fields else 0
+
+
+    # ---- every text block after that, in reading order ----
+    sizes, items = {}, []
+    for pno in range(story_start, len(doc)):
+        page = doc[pno]
+        H = page.rect.height
+        links = [(fitz.Rect(l["from"]), l["uri"]) for l in page.get_links()
+                 if str(l.get("uri", "")).startswith(("http://", "https://"))]
+        page_items = []
+        for b in page.get_text("dict", sort=True)["blocks"]:
+            if b["type"] != 0:
+                continue
+            x0, y0, x1, y1 = b["bbox"]
+            if y1 <= 34 or y0 >= H - 36:          # running header / footer
+                continue
+            spans = [s for l in b["lines"] for s in l["spans"] if s["text"].strip()]
+            if not spans:
+                continue
+            plain = re.sub(r"\s+", " ", " ".join("".join(s["text"] for s in l["spans"]) for l in b["lines"])).strip()
+            size = max(s["size"] for s in spans)
+            for s in spans:
+                sizes[round(s["size"], 1)] = sizes.get(round(s["size"], 1), 0) + len(s["text"])
+            page_items.append({
+                "kind": "p", "page": pno, "x0": x0, "y0": y0, "plain": plain, "size": size,
+                "bold": all(("Bold" in s["font"] or s["flags"] & 16) for s in spans),
+                "lines": len(b["lines"]), "html": pdf_inline(b, links),
+            })
+        # thin horizontal lines drawn between paragraphs are scene breaks
+        for d in page.get_drawings():
+            r = d["rect"]
+            if r.height <= 3 and r.width >= 200 and r.x0 >= 30 and r.x1 <= 590 and d.get("fill") != (0.0, 0.0, 0.9333000183105469):
+                page_items.append({"kind": "hr", "page": pno, "x0": r.x0, "y0": r.y0, "plain": "", "html": ""})
+        page_items.sort(key=lambda i: i["y0"])
+        for n, it in enumerate(page_items):
+            it["first"] = n == 0
+            it["last"] = n == len(page_items) - 1
+        items.extend(page_items)
+    body = max(sizes, key=sizes.get) if sizes else 12.8
+
+    def is_heading(it):
+        if it["kind"] != "p" or it["lines"] != 1:
+            return False
+        if re.match(r"^Chapter \d+", it["plain"]) and it["size"] >= body and it["plain"] not in BODY_LABELS:
+            return True
+        return it["bold"] and it["size"] >= body + 0.5
+
+    is_pointer = lambda t: bool(re.match(r"^See the end of the (work|chapter) for (more )?notes", t))
+    is_afterword = lambda t: t.startswith("Please drop by the Archive and comment")
+
+    # ---- walk through the blocks: header (summary / notes), then chapters ----
+    author, summary, notes = "", [], []
+    chapters, cur_ch = [], None
+    state, region, quote = "header", None, None
+    prev = None   # the paragraph we last added, in case it continues on the next page
+
+    def close_quote():
+        nonlocal quote
+        if quote and cur_ch:
+            cur_ch["parts"].append("</blockquote>")
+        quote = None
+
+    def new_chapter(title):
+        nonlocal cur_ch, prev
+        close_quote()
+        cur_ch = {"title": title, "parts": []}
+        chapters.append(cur_ch)
+        prev = None
+
+    def add_part(part, it=None, joinable=False):
+        nonlocal prev
+        cur_ch["parts"].append(part)
+        prev = (it, len(cur_ch["parts"]) - 1) if joinable else None
+
+    for it in items:
+        t = it["plain"]
+        if state == "header":
+            if it["kind"] == "hr":
+                continue
+            if is_heading(it) and not re.match(r"^Chapter \d+", t):
+                continue                                   # the work's title
+            if t.startswith("by ") and not author and it["lines"] == 1:
+                author = t[3:].strip()
+                continue
+            if t in ("Summary", "Notes"):
+                region = t
+                continue
+            if is_pointer(t) or is_afterword(t):
+                if is_pointer(t) and region:
+                    state, region = "story", None          # the header is over, the story starts next
+                continue
+            if region == "Summary":
+                summary.append(it["html"])
+                continue
+            if region == "Notes" and it["x0"] >= 75:
+                notes.append(it["html"])
+                continue
+            state, region = "story", None                  # anything else is the story itself
+
+        # ---- story ----
+        if is_afterword(t) or is_pointer(t):
+            continue
+        if is_heading(it):
+            if cur_ch and not cur_ch["parts"]:
+                cur_ch["title"] = t
+            else:
+                new_chapter(t)
+            region = None
+            continue
+        if cur_ch is None:
+            new_chapter("Chapter 1")
+        if it["kind"] == "hr":
+            close_quote()
+            add_part("<hr>")
+            continue
+        if t in BODY_LABELS:
+            close_quote()
+            region = t
+            add_part(f'<p class="label">{html.escape(t, quote=False)}</p>')
+            continue
+        if region in ("Chapter Summary", "Chapter Notes") and it["x0"] < 75:
+            close_quote()
+            region = None                                  # indented text is notes; flush-left text is the story
+        if region:
+            if not quote:
+                cur_ch["parts"].append("<blockquote>")
+                quote = True
+            cur_ch["parts"].append(f"<p>{it['html']}</p>")
+            continue
+        close_quote()
+        # a paragraph that carries on over a page break
+        if (prev and it["first"] and prev[0]["last"] and prev[0]["page"] == it["page"] - 1
+                and (not END_PUNCT.search(prev[0]["plain"]) or t[:1].islower())):
+            before = cur_ch["parts"][prev[1]][:-4]          # without the closing </p>
+            glue = "" if re.search(r"[A-Za-z]-$", prev[0]["plain"]) else " "
+            cur_ch["parts"][prev[1]] = before + glue + it["html"] + "</p>"
+            prev = (dict(it, plain=t), prev[1])
+            continue
+        add_part(f"<p>{it['html']}</p>", it, joinable=True)
+
+    close_quote()
+    sections = [{"title": ch["title"], "html": "".join(ch["parts"])} for ch in chapters]
+
+    # ---- put the info together ----
+    meta = doc.metadata or {}
+    title = (meta.get("title") or "").strip()
+    author = author or (meta.get("author") or "").strip()
+    info = {}
+    if title: info["title"] = title
+    if author: info["author"] = author
+    if ao3: info["ao3"] = ao3
+    if "Rating" in fields: info["rating"] = fields["Rating"]
+    tags = []
+    for key in ("Archive Warning", "Archive Warnings", "Relationship", "Relationships", "Additional Tags"):
+        tags += [x.strip() for x in fields.get(key, "").split(", ") if x.strip()]
+    tags = [x for x in tags if x != "No Archive Warnings Apply"]
+    if tags: info["tags"] = list(dict.fromkeys(tags))
+    stats = fields.get("Stats", "")
+    m = re.search(r"Words:\s*([\d,]+)", stats)
+    if m: info["words"] = int(m.group(1).replace(",", ""))
+    m = re.search(r"Chapters:\s*(\d+)/(\d+|\?)", stats)
+    if m: info["status"] = "Complete" if m.group(1) == m.group(2) else "In Progress"
+    flat = " ".join(re.sub(r"<[^>]+>", "", s) for s in summary)
+    if flat: info["summary"] = html.unescape(flat)
+
+    info_html = ""
+    if fields:
+        rows = []
+        for key in order:
+            val = fields[key]
+            if key == "Stats":
+                val = " · ".join(re.findall(r"[A-Z][a-z]+: [^ ]+", val)) or val
+            rows.append(f"<dt>{html.escape(key)}:</dt><dd>{html.escape(val, quote=False)}</dd>")
+        info_html = "<dl>" + "".join(rows) + "</dl>"
+
+    return {
+        "info": info,
+        "summary_html": "".join(f"<p>{s}</p>" for s in summary),
+        "notes_html": "".join(f"<p>{s}</p>" for s in notes),
+        "info_html": info_html,
+        "sections": [s for s in sections if re.sub(r"<[^>]+>", "", s["html"]).strip()],
+    }
+
+
+def write_book_pdf(path, entry, parsed):
+    if not parsed["sections"]:
+        return False
+    BOOK_DIR.mkdir(exist_ok=True)
+    data = {
+        "title": entry["title"], "author": entry["author"], "ao3": entry["ao3"],
+        "rating": entry["rating"], "status": entry["status"], "words": entry["words"],
+        "tags": entry["tags"], "summary": entry["summary"],
+        "summary_html": parsed["summary_html"], "notes_html": parsed["notes_html"],
+        "info_html": parsed["info_html"], "chapters": parsed["sections"],
+    }
+    (BOOK_DIR / f"{path.stem}.json").write_text(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return True
+
+
+
+
+def update_metadata(entry, new_info):
+    """Overwrite existing values when the new source has useful data."""
+    for key, value in new_info.items():
+        if value not in ("", 0, [], None):
+            entry[key] = value
+
+
+
+def remove_duplicate_fics(entries):
+    """Keep one entry per AO3 work, merging source files."""
+    unique = {}
+    result = []
+
+    for entry in entries:
+        ao3_id = re.search(r"/works/(\d+)", entry.get("ao3", ""))
+
+        if ao3_id:
+            key = "ao3:" + ao3_id.group(1)
+        else:
+            key = "file:" + Path(entry["files"][0]).stem
+
+        if key not in unique:
+            unique[key] = entry
+            result.append(entry)
+        else:
+            kept = unique[key]
+
+            # Merge file paths without duplicates
+            kept["files"] = list(dict.fromkeys(
+                kept.get("files", []) + entry.get("files", [])
+            ))
+
+            # Update metadata, but don't overwrite the merged files
+            for field, value in entry.items():
+                if field in ("files", "book"):
+                    continue
+                if value not in ("", 0, [], None):
+                    kept[field] = value
+
+    return result
+
+
 #da main
 existing = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else []
 by_stem = {Path(f["files"][0]).stem: f for f in existing}
+
+epub_stems = {
+    p.stem for p in FIC_DIR.iterdir()
+    if p.suffix.lower() == ".epub"
+}
 
 for p in sorted(FIC_DIR.iterdir()):
     if p.suffix.lower() not in (".pdf", ".epub"):
@@ -299,9 +696,8 @@ for p in sorted(FIC_DIR.iterdir()):
         except Exception as e:
             print("Could not read", p.name, "-", e)
             continue
-        for key, value in info.items():
-            if entry.get(key) in ("", 0, [], None):
-                entry[key] = value
+        update_metadata(entry, info)
+
         if entry["title"] == p.stem.replace("_", " ").replace("-", " ").strip():
             entry["title"] = info.get("title", entry["title"])
 
@@ -313,6 +709,28 @@ for p in sorted(FIC_DIR.iterdir()):
         except Exception as e:
             print("Could not build reader copy for", p.name, "-", e)
 
+    elif p.suffix.lower() == ".pdf":
+        # Prefer EPUB when both formats exist with the same filename
+        if p.stem in epub_stems:
+            continue
+        try:
+            parsed = parse_pdf(p)
+        except Exception as e:
+            print("Could not read", p.name, "-", e)
+            continue
+        update_metadata(entry, parsed["info"])
+        if entry["title"] == p.stem.replace("_", " ").replace("-", " ").strip():
+            entry["title"] = parsed["info"].get("title", entry["title"])
+
+        # build the on-site reading copy
+        try:
+            if write_book_pdf(p, entry, parsed):
+                entry["book"] = p.stem
+                print("Reader copy:", p.stem)
+        except Exception as e:
+            print("Could not build reader copy for", p.name, "-", e)
+
+existing = remove_duplicate_fics(existing)
 
 OUT.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
 print("Done.", len(existing), "fics in fics.json")
