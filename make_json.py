@@ -46,16 +46,32 @@ def read_epub(path):
         if summary:
             info["summary"] = clean(html.unescape(summary.group(1)))
 
+
+        metadata_found = False
         for name in sorted(z.namelist()):
             if not name.endswith((".xhtml", ".html")):
                 continue
-            page = z.read(name).decode("utf-8")
-            if 'class="tags"' not in page and "class=\"calibre3\"" not in page:
+
+            page = z.read(name).decode("utf-8", errors="replace")
+
+            # Find the original AO3 link on ANY EPUB page
+            if not info.get("ao3"):
+                link = re.search(
+                    r"https?://(?:www\.)?archiveofourown\.org/works/\d+",
+                    page,
+                    re.I
+                )
+                if link:
+                    info["ao3"] = link.group(0).replace("http://", "https://")
+
+            # Only metadata extraction requires the tags page
+            if metadata_found:
                 continue
 
-            link = re.search(r"https://archiveofourown\.org/works/\d+", page)
-            if link:
-                info["ao3"] = link.group(0)
+            if 'class="tags"' not in page and 'class="calibre3"' not in page:
+                continue
+
+            metadata_found = True
 
             fields = {}
             for dt, dd in re.findall(r"<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>", page, re.S):
@@ -68,6 +84,7 @@ def read_epub(path):
             for key in ("Archive Warning", "Relationship", "Additional Tags"):
                 if key in fields:
                     tags += links_in(fields[key])
+
             tags = [t for t in tags if t != "No Archive Warnings Apply"]
             info["tags"] = list(dict.fromkeys(tags))
 
@@ -75,11 +92,13 @@ def read_epub(path):
             words = re.search(r"Words:\s*([\d,]+)", stats)
             if words:
                 info["words"] = int(words.group(1).replace(",", ""))
+
             chapters = re.search(r"Chapters:\s*(\d+)/(\d+|\?)", stats)
             if chapters:
-                done = chapters.group(1) == chapters.group(2) #verify if number/number of chapters so if fic complete
+                done = chapters.group(1) == chapters.group(2)
                 info["status"] = "Complete" if done else "In Progress"
-            break
+
+
     return info
 
 
@@ -340,83 +359,56 @@ def parse_pdf(path):
             raise RuntimeError("PDF support needs PyMuPDF. Run this once: pip3 install pymupdf")
 
     doc = fitz.open(path)
+    is_bold = lambda s: "Bold" in s["font"] or bool(s["flags"] & 16)
 
-
-    
-    #read metadata across multiple pages in case tags r long it finishes it n gets to summary
+    # ---- the AO3 info table (Rating, Fandom, Tags, Stats...). It can run over more than one page. ----
     fields, order = {}, []
-    ao3 = ""
-    cur = None
-    story_start = None
-
+    ao3, cur, story_start, last_info_page = "", None, None, -1
     for pno, page in enumerate(doc):
-        page_dict = page.get_text("dict", sort=True)
-
-        for b in page_dict["blocks"]:
-            for l in b.get("lines", []):
-                text = re.sub(
-                    r"\s+",
-                    " ",
-                    "".join(s["text"] for s in l["spans"])
-                ).strip()
-
+        done = False
+        for b in page.get_text("dict", sort=True)["blocks"]:
+            if b["type"] != 0:
+                continue
+            spans = [s for l in b["lines"] for s in l["spans"] if s["text"].strip()]
+            if not spans:
+                continue
+            # the big bold title of the next page means the info table is over
+            if fields and pno > last_info_page and all(is_bold(s) for s in spans) and max(s["size"] for s in spans) >= 16:
+                done = True
+                break
+            for l in b["lines"]:
+                text = re.sub(r"\s+", " ", "".join(s["text"] for s in l["spans"])).strip()
                 if not text:
                     continue
-
-                #summary heading marks the beginning of the story copy
-                if text == "Summary":
-                    story_start = pno
+                if text.rstrip(":") in ("Summary", "Notes"):
+                    done = True
                     break
-
-                #extract ao3 link url
-                m = re.search(
-                    r"https?://archiveofourown\.org/works/\d+",
-                    text
-                )
-                if m:
+                m = re.search(r"https?://archiveofourown\.org/works/\d+", text)
+                if m and not ao3:
                     ao3 = m.group(0).replace("http://", "https://")
-
-                #labels detection
                 label_match = re.match(r"^(.+?):\s*(.*)$", text)
-
-                if (
-                    label_match
-                    and label_match.group(1).strip() in INFO_LABELS
-                ):
+                if label_match and label_match.group(1).strip() in INFO_LABELS:
                     cur = label_match.group(1).strip()
-                    value = label_match.group(2).strip()
-
-                    fields[cur] = value
+                    fields[cur] = label_match.group(2).strip()
                     order.append(cur)
+                    last_info_page = pno
                     continue
-
-                #stats field can be wrapped across multiple lines, so we append to it
                 if cur == "Stats":
-                    if re.match(
-                        r"^(Published|Updated|Completed|Words|Chapters):",
-                        text
-                    ):
-                        fields[cur] += " " + text
+                    fields[cur] += " " + text
                     continue
-
-               
-                if cur:
+                if cur and pno <= last_info_page + 1:
                     if fields[cur] and not re.search(r"[A-Za-z]-$", fields[cur]):
                         fields[cur] += " "
                     fields[cur] += text
-
-            if story_start is not None:
+            if done:
                 break
-
-        if story_start is not None:
+        if done:
+            story_start = pno
             break
-
-    #fall back to first page if no summary heading found, but only if there are metadata fields present
     if story_start is None:
-        story_start = 1 if "Rating" in fields else 0
+        story_start = last_info_page + 1 if "Rating" in fields else 0
 
-
-    #text 
+    # ---- every text block after that, in reading order ----
     sizes, items = {}, []
     for pno in range(story_start, len(doc)):
         page = doc[pno]
@@ -438,21 +430,30 @@ def parse_pdf(path):
             for s in spans:
                 sizes[round(s["size"], 1)] = sizes.get(round(s["size"], 1), 0) + len(s["text"])
             page_items.append({
-                "kind": "p", "page": pno, "x0": x0, "y0": y0, "plain": plain, "size": size,
-                "bold": all(("Bold" in s["font"] or s["flags"] & 16) for s in spans),
+                "kind": "p", "page": pno, "H": H, "x0": x0, "y0": y0, "y1": y1, "plain": plain, "size": size,
+                "bold": all(is_bold(s) for s in spans),
                 "lines": len(b["lines"]), "html": pdf_inline(b, links),
             })
-        #thin horizontal lines drawn between paragraphs are scene breaks
+        # thin horizontal lines drawn between paragraphs are scene breaks
         for d in page.get_drawings():
             r = d["rect"]
             if r.height <= 3 and r.width >= 200 and r.x0 >= 30 and r.x1 <= 590 and d.get("fill") != (0.0, 0.0, 0.9333000183105469):
-                page_items.append({"kind": "hr", "page": pno, "x0": r.x0, "y0": r.y0, "plain": "", "html": ""})
+                page_items.append({"kind": "hr", "page": pno, "H": H, "x0": r.x0, "y0": r.y0, "y1": r.y1, "plain": "", "html": ""})
         page_items.sort(key=lambda i: i["y0"])
         for n, it in enumerate(page_items):
             it["first"] = n == 0
             it["last"] = n == len(page_items) - 1
+            it["gap"] = it["y0"] - page_items[n - 1]["y1"] if n else None
         items.extend(page_items)
     body = max(sizes, key=sizes.get) if sizes else 12.8
+
+    # AO3 starts a new page for each part (info / title+summary / story / end notes), so a page that
+    # ends early followed by a new page means one part is over. Big gaps inside a page mean the same.
+    for n, it in enumerate(items):
+        it["early_break"] = bool(n and it["first"] and items[n - 1]["page"] == it["page"] - 1
+                                 and items[n - 1]["y1"] < it["H"] - 150)
+    gaps = sorted(it["gap"] for it in items if it["gap"] is not None and 3 < it["gap"] < 30)
+    big_gap = (gaps[len(gaps) // 2] if gaps else 14) + 9
 
     def is_heading(it):
         if it["kind"] != "p" or it["lines"] != 1:
@@ -463,101 +464,165 @@ def parse_pdf(path):
 
     is_pointer = lambda t: bool(re.match(r"^See the end of the (work|chapter) for (more )?notes", t))
     is_afterword = lambda t: t.startswith("Please drop by the Archive and comment")
+    label_of = lambda t: (t[:-1] if t.endswith(":") else t)
 
-    #walk through the blocks: header (summary / notes), then chapters
-    author, summary, notes = "", [], []
-    chapters, cur_ch = [], None
-    state, region, quote = "header", None, None
-    prev = None   #the paragraph we last added, in case it continues on the next page
+    def walk(header_mode):
+        author, summary, notes = "", [], []
+        chapters, cur_ch = [], None
+        state = "header" if header_mode else "story"
+        reg = {"name": None, "chars": 0, "blocks": 0, "label": None}
+        quote, prev = False, None
 
-    def close_quote():
-        nonlocal quote
-        if quote and cur_ch:
-            cur_ch["parts"].append("</blockquote>")
-        quote = None
+        def region_over(it):
+            # notes and summaries have length limits on AO3 (about 1250 / 5000 characters)
+            if not reg["name"] or reg["blocks"] == 0:
+                return False
+            cap = 1300 if reg["name"].endswith("Summary") else 5200
+            if reg["chars"] + len(it["plain"]) > cap:
+                return True
+            if (it["gap"] is not None and it["gap"] >= big_gap
+            and reg["name"] != "Summary"):
+              return True
+            return it["early_break"]
 
-    def new_chapter(title):
-        nonlocal cur_ch, prev
-        close_quote()
-        cur_ch = {"title": title, "parts": []}
-        chapters.append(cur_ch)
-        prev = None
+        def reset_region():
+            reg.update(name=None, chars=0, blocks=0, label=None)
 
-    def add_part(part, it=None, joinable=False):
-        nonlocal prev
-        cur_ch["parts"].append(part)
-        prev = (it, len(cur_ch["parts"]) - 1) if joinable else None
+        def close_quote():
+            nonlocal quote
+            if quote and cur_ch:
+                cur_ch["parts"].append("</blockquote>")
+            quote = False
 
-    for it in items:
-        t = it["plain"]
-        if state == "header":
+        def new_chapter(title):
+            nonlocal cur_ch, prev
+            close_quote()
+            cur_ch = {"title": title, "parts": []}
+            chapters.append(cur_ch)
+            prev = None
+
+        def add_part(part, it=None, joinable=False):
+            nonlocal prev
+            cur_ch["parts"].append(part)
+            prev = (it, len(cur_ch["parts"]) - 1) if joinable else None
+
+        for it in items:
+            t = it["plain"]
+            lab = label_of(t)
+
+
+            # A real chapter heading marks the end of the work's header.
+            if (state == "header" and is_heading(it)
+                    and re.match(r"^Chapter \d+\b", t)):
+                state = "story"
+                reset_region()
+
+            if state == "header":
+                if it["kind"] == "hr":
+                    continue
+                if is_heading(it) and not re.match(r"^Chapter \d+", t):
+                    continue                                   # the work's title
+                if t.startswith("by ") and not author and it["lines"] == 1:
+                    author = t[3:].strip()
+                    continue
+                if lab in ("Summary", "Notes"):
+                    reset_region()
+                    reg["name"] = lab
+                    continue
+                if is_pointer(t):
+                    # "...for more notes" means the notes are still to come; plain "...for notes" means the header is over
+                    if not ("more notes" in t and reg["blocks"] == 0):
+                        state = "story"
+                        reset_region()
+                    continue
+                
+                if reg["name"] in ("Summary", "Notes") and not region_over(it):
+                    (summary if reg["name"] == "Summary" else notes).append(it["html"])
+                    reg["chars"] += len(t)
+                    reg["blocks"] += 1
+                    continue
+                state = "story"                                # first block after the header = the story
+                reset_region()
+
+            # ---- story ----
+            
+            if is_pointer(t):
+                if reg["name"] and not ("more notes" in t and reg["blocks"] == 0):
+                    if reg["blocks"] == 0 and reg["label"] is not None and cur_ch and cur_ch["parts"] and cur_ch["parts"][-1] == reg["label"]:
+                        cur_ch["parts"].pop()                  # a label with nothing under it
+                    close_quote()
+                    reset_region()
+                continue
+            if is_heading(it):
+                if cur_ch and not cur_ch["parts"]:
+                    cur_ch["title"] = t
+                else:
+                    new_chapter(t)
+                reset_region()
+                continue
+            if cur_ch is None:
+                new_chapter("Chapter 1")
             if it["kind"] == "hr":
+                close_quote()
+                reset_region()
+                add_part("<hr>")
                 continue
-            if is_heading(it) and not re.match(r"^Chapter \d+", t):
-                continue                                   #the work's title
-            if t.startswith("by ") and not author and it["lines"] == 1:
-                author = t[3:].strip()
+            if lab in BODY_LABELS:
+                close_quote()
+                reset_region()
+                label_html = f'<p class="label">{html.escape(lab, quote=False)}</p>'
+                reg["name"], reg["label"] = lab, label_html
+                add_part(label_html)
                 continue
-            if t in ("Summary", "Notes"):
-                region = t
+            if reg["name"] and region_over(it):
+                close_quote()
+                reset_region()
+            if reg["name"]:
+                if not quote:
+                    cur_ch["parts"].append("<blockquote>")
+                    quote = True
+                cur_ch["parts"].append(f"<p>{it['html']}</p>")
+                reg["chars"] += len(t)
+                reg["blocks"] += 1
                 continue
-            if is_pointer(t) or is_afterword(t):
-                if is_pointer(t) and region:
-                    state, region = "story", None          #the header is over, the story starts next
-                continue
-            if region == "Summary":
-                summary.append(it["html"])
-                continue
-            if region == "Notes" and it["x0"] >= 75:
-                notes.append(it["html"])
-                continue
-            state, region = "story", None                  #anything else is the story itself
+            close_quote()
+            # a paragraph that carries on over a page break
+            continues_afterword = (
+                prev
+                and is_afterword(prev[0]["plain"])
+                and prev[0]["page"] == it["page"]
+                and t[:1].islower()
+            )
 
-        #story
-        if is_afterword(t) or is_pointer(t):
-            continue
-        if is_heading(it):
-            if cur_ch and not cur_ch["parts"]:
-                cur_ch["title"] = t
-            else:
-                new_chapter(t)
-            region = None
-            continue
-        if cur_ch is None:
-            new_chapter("Chapter 1")
-        if it["kind"] == "hr":
-            close_quote()
-            add_part("<hr>")
-            continue
-        if t in BODY_LABELS:
-            close_quote()
-            region = t
-            add_part(f'<p class="label">{html.escape(t, quote=False)}</p>')
-            continue
-        if region in ("Chapter Summary", "Chapter Notes") and it["x0"] < 75:
-            close_quote()
-            region = None                                  #indented text is notes; flush-left text is the story
-        if region:
-            if not quote:
-                cur_ch["parts"].append("<blockquote>")
-                quote = True
-            cur_ch["parts"].append(f"<p>{it['html']}</p>")
-            continue
+            continues_page = (
+                prev
+                and it["first"]
+                and prev[0]["last"]
+                and prev[0]["page"] == it["page"] - 1
+                and (not END_PUNCT.search(prev[0]["plain"]) or t[:1].islower())
+            )
+
+            if continues_afterword or continues_page:
+                before = cur_ch["parts"][prev[1]][:-4]
+                glue = "" if re.search(r"[A-Za-z]-$", prev[0]["plain"]) else " "
+                cur_ch["parts"][prev[1]] = before + glue + it["html"] + "</p>"
+                prev = (dict(it, plain=t), prev[1])
+                continue
+
+            add_part(f"<p>{it['html']}</p>", it, joinable=True)
+
         close_quote()
-        #a paragraph that carries on over a page break
-        if (prev and it["first"] and prev[0]["last"] and prev[0]["page"] == it["page"] - 1
-                and (not END_PUNCT.search(prev[0]["plain"]) or t[:1].islower())):
-            before = cur_ch["parts"][prev[1]][:-4]          #without the closing </p>
-            glue = "" if re.search(r"[A-Za-z]-$", prev[0]["plain"]) else " "
-            cur_ch["parts"][prev[1]] = before + glue + it["html"] + "</p>"
-            prev = (dict(it, plain=t), prev[1])
-            continue
-        add_part(f"<p>{it['html']}</p>", it, joinable=True)
+        sections = [{"title": ch["title"], "html": "".join(ch["parts"])} for ch in chapters]
+        sections = [s for s in sections if re.sub(r"<[^>]+>", "", s["html"]).strip()]
+        return author, summary, notes, sections
 
-    close_quote()
-    sections = [{"title": ch["title"], "html": "".join(ch["parts"])} for ch in chapters]
+    author, summary, notes, sections = walk(True)
+    if not sections:
+        # the header logic swallowed everything, so read the whole thing as story instead of failing
+        author2, summary, notes, sections = walk(False)
+        author = author or author2
 
-    #put everything tght chakalaka
+    # ---- put the info together ----
     meta = doc.metadata or {}
     title = (meta.get("title") or "").strip()
     author = author or (meta.get("author") or "").strip()
@@ -571,11 +636,27 @@ def parse_pdf(path):
         tags += [x.strip() for x in fields.get(key, "").split(", ") if x.strip()]
     tags = [x for x in tags if x != "No Archive Warnings Apply"]
     if tags: info["tags"] = list(dict.fromkeys(tags))
-    stats = fields.get("Stats", "")
+
+    stats = re.sub(r"\s+", " ", fields.get("Stats", "")).strip()
+
+    # Extract word count
     m = re.search(r"Words:\s*([\d,]+)", stats)
-    if m: info["words"] = int(m.group(1).replace(",", ""))
-    m = re.search(r"Chapters:\s*(\d+)/(\d+|\?)", stats)
-    if m: info["status"] = "Complete" if m.group(1) == m.group(2) else "In Progress"
+    if m:
+        info["words"] = int(m.group(1).replace(",", ""))
+
+    # Extract completion status
+    m = re.search(r"Chapters:\s*(\d+)\s*/\s*(\d+|\?)", stats)
+
+    if m:
+        current = int(m.group(1))
+        total = m.group(2)
+
+        if total == "?":
+            info["status"] = "In Progress"
+        else:
+            info["status"] = "Complete" if current == int(total) else "In Progress"
+
+
     flat = " ".join(re.sub(r"<[^>]+>", "", s) for s in summary)
     if flat: info["summary"] = html.unescape(flat)
 
@@ -594,9 +675,8 @@ def parse_pdf(path):
         "summary_html": "".join(f"<p>{s}</p>" for s in summary),
         "notes_html": "".join(f"<p>{s}</p>" for s in notes),
         "info_html": info_html,
-        "sections": [s for s in sections if re.sub(r"<[^>]+>", "", s["html"]).strip()],
+        "sections": sections,
     }
-
 
 def write_book_pdf(path, entry, parsed):
     if not parsed["sections"]:
@@ -647,7 +727,10 @@ def remove_duplicate_fics(entries):
             kept["files"] = list(dict.fromkeys(
                 kept.get("files", []) + entry.get("files", [])
             ))
-
+            #keep the reader copy if this duplicate has one and the kept entry doesn't
+            if not kept.get("book") and entry.get("book"):
+                kept["book"] = entry["book"]
+                
             #update metadata, but don't overwrite the merged files
             for field, value in entry.items():
                 if field in ("files", "book"):
