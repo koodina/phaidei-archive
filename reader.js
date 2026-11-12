@@ -13,7 +13,36 @@ const store = {
   }
 };
 
-const bookId = new URLSearchParams(location.search).get("book");
+// Use the exact same bookmark list as the main archive
+let savedStories = new Set();
+
+try {
+  savedStories = new Set(JSON.parse(localStorage.getItem("saved") || "[]"));
+} catch {
+  savedStories = new Set();
+}
+
+function updateStoryBookmark() {
+  const isSaved = savedStories.has(archiveId);
+  $("saveStory").textContent = isSaved ? "★ Bookmarked" : "☆ Bookmark";
+  $("saveStory").classList.toggle("on", isSaved);
+}
+
+$("saveStory").addEventListener("click", () => {
+  if (savedStories.has(archiveId)) {
+    savedStories.delete(archiveId);
+  } else {
+    savedStories.add(archiveId);
+  }
+
+  localStorage.setItem("saved", JSON.stringify([...savedStories]));
+  updateStoryBookmark();
+});
+
+const params = new URLSearchParams(location.search);
+const bookId = params.get("book");
+const archiveId = params.get("id") || bookId;
+
 let book = null;
 let chapterEls = [];
 let ready = false;  
@@ -88,6 +117,7 @@ function start(data) {
   const title = book.title || "Untitled";
   document.title = title + " · Phaidei Archive";
   $("barTitle").textContent = title;
+  updateStoryBookmark();
 
 
   const storyChapters = book.chapters.filter(c => !/^afterword$/i.test(c.title));

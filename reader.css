@@ -351,3 +351,17 @@
 .hero-info dt:first-child { margin-top: 0; }
 .hero-info dd { margin: 0; }
 .hero-info a { color: var(--gold); }
+
+#saveStory {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+#saveStory.on {
+  background: var(--gold);
+  color: var(--bg);
+}
+
+#saveStory:hover {
+  border-color: var(--gold);
+}

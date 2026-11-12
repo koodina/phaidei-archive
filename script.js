@@ -37,6 +37,16 @@ fetch("fics.json?v=" + Date.now()) //to prevent browser using a cashed ver of fi
     fillSelect("rating", "rating", "All ratings");
     fillSelect("status", "status", "All statuses");
     render();
+
+    const returnScroll = sessionStorage.getItem("archiveReturnScroll");
+
+    if (returnScroll !== null) {
+      sessionStorage.removeItem("archiveReturnScroll");
+
+      requestAnimationFrame(() => {
+        window.scrollTo(0, Number(returnScroll));
+      });
+    }
   })
   .catch(() => {
     $("list").textContent = "Could not load fics.json :( check the file for typos!";
@@ -216,7 +226,7 @@ function render() {
 
   $("list").innerHTML = list.map(f => {
     const readBtn = f.book
-      ? `<a class="read" href="reader.html?book=${encodeURIComponent(f.book)}">Read</a>` : "";
+    ? `<a class="read" href="reader.html?book=${encodeURIComponent(f.book)}&id=${encodeURIComponent(f.id)}">Read</a>` : "";
 
     const links = f.files.map(file => {
       const isEpub = file.toLowerCase().endsWith(".epub");
@@ -264,6 +274,12 @@ function render() {
 
 
 $("list").addEventListener("click", e => {
+  const readLink = e.target.closest("a.read");
+
+  if (readLink) {
+    sessionStorage.setItem("archiveReturnScroll", String(window.scrollY));
+    return;
+  }
   const tagBtn = e.target.closest(".tag");
   if (tagBtn) {
     setTag(tagBtn.dataset.tag, "include");   //click to include , double excludes 
